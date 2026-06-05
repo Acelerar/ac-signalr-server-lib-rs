@@ -1,0 +1,7 @@
+/target
+
+# .NET
+clients/dotnet-chat-client/ChatClient/bin/
+clients/dotnet-chat-client/ChatClient/obj/
+.env
+Cargo.lock

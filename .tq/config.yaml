@@ -1,0 +1,15 @@
+# Tranquilidad runs configured commands from Git hooks.
+version: 1
+runtime:
+  windows:
+    msvcEnv: auto
+hooks:
+  pre-commit:
+    commands:
+      - cargo fmt --all --check
+      - cargo clippy --workspace --all-targets -- -D warnings
+      - cargo test --workspace
+  commit-msg:
+    commands:
+      - command: ct
+        args: ["--edit"]
