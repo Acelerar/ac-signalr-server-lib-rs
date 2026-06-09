@@ -1,4 +1,4 @@
-//! SignalR server implementation using Axum and fastwebsockets
+//! `SignalR` server implementation using Axum and fastwebsockets
 
 use crate::connection::Connection;
 use crate::error::Result;
@@ -55,7 +55,7 @@ const CLIENT_TIMEOUT: Duration = Duration::from_secs(30);
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
 const CLOSE_ECHO_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// SignalR server adapter that exposes a hub through Axum routes.
+/// `SignalR` server adapter that exposes a hub through Axum routes.
 ///
 /// The hub value is cloned into per-connection tasks, so shared application
 /// state should be stored in cheap-to-clone handles such as `Arc<_>`,
@@ -80,7 +80,7 @@ struct SignalRServerShutdownState {
 /// Shutdown handle for a [`SignalRServer`].
 ///
 /// Use this handle when the enclosing application is shutting down so active
-/// WebSocket connections can receive a SignalR close message and a WebSocket
+/// WebSocket connections can receive a `SignalR` close message and a WebSocket
 /// close frame before the process exits.
 #[derive(Clone)]
 pub struct SignalRServerHandle {
@@ -169,7 +169,7 @@ impl SignalRServerShutdownState {
 }
 
 impl<H: Hub> SignalRServer<H> {
-    /// Creates a new SignalR server for the provided hub implementation.
+    /// Creates a new `SignalR` server for the provided hub implementation.
     pub fn new(hub: H) -> Self {
         Self {
             state: Arc::new(SignalRServerState {
@@ -180,6 +180,7 @@ impl<H: Hub> SignalRServer<H> {
     }
 
     /// Returns a handle that can gracefully drain active WebSocket connections.
+    #[must_use]
     pub fn shutdown_handle(&self) -> SignalRServerHandle {
         SignalRServerHandle {
             shutdown: Arc::clone(&self.state.shutdown),
@@ -189,7 +190,7 @@ impl<H: Hub> SignalRServer<H> {
     /// Converts the server into an Axum router.
     ///
     /// Nest the returned router beneath a hub path such as `/chat`. The router
-    /// serves `GET|POST /negotiate` for SignalR negotiation and `GET /` for the
+    /// serves `GET|POST /negotiate` for `SignalR` negotiation and `GET /` for the
     /// WebSocket transport endpoint.
     pub fn into_router(self) -> Router {
         Router::new()
@@ -301,11 +302,8 @@ async fn websocket_handler<H: Hub>(
             .into_response();
     };
 
-    let (response, fut) = match ws.upgrade() {
-        Ok((response, fut)) => (response, fut),
-        Err(_) => {
-            return (StatusCode::BAD_REQUEST, "Failed to upgrade WebSocket").into_response();
-        }
+    let Ok((response, fut)) = ws.upgrade() else {
+        return (StatusCode::BAD_REQUEST, "Failed to upgrade WebSocket").into_response();
     };
 
     let metadata = json!({
@@ -328,6 +326,7 @@ async fn websocket_handler<H: Hub>(
 }
 
 /// Handle a WebSocket connection
+#[allow(clippy::too_many_lines)]
 async fn handle_socket<H: Hub>(
     ws: WebSocket<TokioIo<Upgraded>>,
     server: Arc<SignalRServerState<H>>,
@@ -586,11 +585,7 @@ async fn handle_socket<H: Hub>(
                         break;
                     }
                 }
-                changed = server_shutdown_rx.changed() => {
-                    if changed.is_err() || *server_shutdown_rx.borrow() {
-                        continue;
-                    }
-                }
+                _changed = server_shutdown_rx.changed() => {}
                 Some(frame) = auto_frame_rx.recv() => {
                     if let Err(error) = ws_write.write_frame(frame).await {
                         error!("Failed to send automatic frame on {}: {}", connection_id_write, error);
@@ -680,18 +675,16 @@ async fn wait_for_flag(flag_rx: &mut watch::Receiver<bool>) {
     }
 }
 
-/// Perform the SignalR handshake
+/// Perform the `SignalR` handshake
 async fn perform_handshake(ws: &mut FragmentCollector<TokioIo<Upgraded>>) -> Result<Protocol> {
     // Read the handshake request
-    let frame = match timeout(HANDSHAKE_TIMEOUT, ws.read_frame()).await {
-        Ok(frame) => frame?,
-        Err(_) => {
-            let error = SignalRError::InvalidHandshake(
-                "Timed out waiting for handshake request".to_string(),
-            );
-            send_handshake_error(ws, &error).await;
-            return Err(error);
-        }
+    let frame = if let Ok(frame) = timeout(HANDSHAKE_TIMEOUT, ws.read_frame()).await {
+        frame?
+    } else {
+        let error =
+            SignalRError::InvalidHandshake("Timed out waiting for handshake request".to_string());
+        send_handshake_error(ws, &error).await;
+        return Err(error);
     };
 
     if frame.opcode != OpCode::Text {
@@ -760,7 +753,7 @@ fn validate_handshake(handshake: &crate::protocol::HandshakeRequest) -> Result<P
         .ok_or_else(|| SignalRError::UnsupportedProtocol(handshake.protocol.clone()))
 }
 
-/// Handle a SignalR message
+/// Handle a `SignalR` message
 async fn handle_message<H: Hub>(
     hub: &H,
     ctx: &HubContext,
@@ -782,7 +775,7 @@ async fn handle_message<H: Hub>(
     dispatch_hub_message(hub, ctx, message).await
 }
 
-/// Handle a SignalR binary message (MessagePack)
+/// Handle a `SignalR` binary message (`MessagePack`)
 async fn handle_message_binary<H: Hub>(hub: &H, ctx: &HubContext, data: &[u8]) -> Result<()> {
     let messages = parse_messages_messagepack(data)?;
 
@@ -878,6 +871,7 @@ fn send_completion(
 }
 
 #[cfg(test)]
+#[allow(clippy::pedantic, clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
     use crate::protocol::parse_message_messagepack;

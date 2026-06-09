@@ -1,10 +1,10 @@
-//! SignalR protocol messages
+//! `SignalR` protocol messages
 
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 
-/// The type of SignalR message
+/// The type of `SignalR` message
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MessageType {
     /// Invocation message (type 1)
@@ -30,7 +30,7 @@ pub enum MessageType {
     Close = 7,
 }
 
-/// A SignalR hub message
+/// A `SignalR` hub message
 #[derive(Debug, Clone)]
 pub enum HubMessage {
     /// Invocation message
@@ -132,6 +132,7 @@ pub struct CloseMessage {
 
 impl HubMessage {
     /// Get the invocation ID if present
+    #[must_use]
     pub fn invocation_id(&self) -> Option<&str> {
         match self {
             HubMessage::Invocation(msg) => msg.invocation_id.as_deref(),
@@ -237,6 +238,7 @@ impl<'de> Deserialize<'de> for HubMessage {
         let type_value = obj
             .get("type")
             .ok_or_else(|| serde::de::Error::missing_field("type"))?;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let message_type = if let Some(n) = type_value.as_i64() {
             n as u8
         } else if let Some(s) = type_value.as_str() {
@@ -283,14 +285,14 @@ impl<'de> Deserialize<'de> for HubMessage {
                 Ok(HubMessage::Close(msg))
             }
             _ => Err(serde::de::Error::custom(format!(
-                "Unknown message type: {}",
-                message_type
+                "Unknown message type: {message_type}"
             ))),
         }
     }
 }
 
 #[cfg(test)]
+#[allow(clippy::pedantic, clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
     use serde_json::json;

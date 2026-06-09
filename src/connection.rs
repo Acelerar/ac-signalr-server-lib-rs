@@ -1,4 +1,4 @@
-//! Connection management for SignalR
+//! Connection management for `SignalR`
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -6,17 +6,19 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-/// Unique identifier for a SignalR connection.
+/// Unique identifier for a `SignalR` connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ConnectionId(Uuid);
 
 impl ConnectionId {
     /// Creates a new random connection ID.
+    #[must_use]
     pub fn new() -> Self {
         Self(Uuid::new_v4())
     }
 
     /// Returns the underlying UUID value.
+    #[must_use]
     pub fn as_uuid(&self) -> &Uuid {
         &self.0
     }
@@ -34,7 +36,7 @@ impl std::fmt::Display for ConnectionId {
     }
 }
 
-/// Represents a connected SignalR client.
+/// Represents a connected `SignalR` client.
 ///
 /// Each connection carries a unique ID and arbitrary JSON metadata that can be
 /// shared across hub callbacks.
@@ -45,6 +47,7 @@ pub struct Connection {
 
 impl Connection {
     /// Creates a new connection with an empty metadata payload.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             id: ConnectionId::new(),
@@ -53,6 +56,7 @@ impl Connection {
     }
 
     /// Returns the connection ID.
+    #[must_use]
     pub fn id(&self) -> ConnectionId {
         self.id
     }
@@ -75,6 +79,7 @@ impl Default for Connection {
 }
 
 #[cfg(test)]
+#[allow(clippy::pedantic, clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
 

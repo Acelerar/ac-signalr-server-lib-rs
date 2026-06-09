@@ -1,11 +1,11 @@
-//! Error types for SignalR operations
+//! Error types for `SignalR` operations
 
 use thiserror::Error;
 
-/// Result type for SignalR operations
+/// Result type for `SignalR` operations
 pub type Result<T> = std::result::Result<T, SignalRError>;
 
-/// Errors that can occur during SignalR operations
+/// Errors that can occur during `SignalR` operations
 #[derive(Debug, Error)]
 pub enum SignalRError {
     /// WebSocket error
@@ -16,11 +16,11 @@ pub enum SignalRError {
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 
-    /// MessagePack serialization/deserialization error
+    /// `MessagePack` serialization/deserialization error
     #[error("MessagePack error: {0}")]
     MessagePack(#[from] rmp_serde::encode::Error),
 
-    /// MessagePack deserialization error
+    /// `MessagePack` deserialization error
     #[error("MessagePack decode error: {0}")]
     MessagePackDecode(#[from] rmp_serde::decode::Error),
 
@@ -46,6 +46,7 @@ pub enum SignalRError {
 }
 
 #[cfg(test)]
+#[allow(clippy::pedantic, clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
 

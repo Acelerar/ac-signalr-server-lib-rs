@@ -6,6 +6,7 @@
 //! ```
 //!
 //! Then connect with a SignalR client to http://localhost:3000/chat
+#![allow(clippy::pedantic, clippy::unwrap_used, clippy::indexing_slicing)]
 
 use ac_signalr_server::CompletionMessage;
 use ac_signalr_server::Hub;

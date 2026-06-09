@@ -1,5 +1,5 @@
 #![warn(missing_docs, rustdoc::broken_intra_doc_links)]
-//! Async SignalR server primitives for Axum applications.
+//! Async `SignalR` server primitives for Axum applications.
 //!
 //! `ac-signalr-server` mounts a SignalR-compatible hub beneath an Axum route.
 //! [`SignalRServer`] exposes the standard negotiation and WebSocket endpoints,
@@ -11,7 +11,7 @@
 //! Nest the router returned by [`SignalRServer::into_router`] under a path such
 //! as `/chat`. That mount exposes:
 //!
-//! - `GET|POST /chat/negotiate` for SignalR negotiation
+//! - `GET|POST /chat/negotiate` for `SignalR` negotiation
 //! - `GET /chat/` for the WebSocket transport endpoint
 //!
 //! # Quick start
@@ -66,7 +66,7 @@
 //!
 //! # Protocol support
 //!
-//! The crate supports JSON and MessagePack hub payloads, SignalR handshakes,
+//! The crate supports JSON and `MessagePack` hub payloads, `SignalR` handshakes,
 //! request/response invocations, server-to-client messages via
 //! [`HubContext::send`], and server streaming through
 //! [`Hub::on_stream_invocation`].

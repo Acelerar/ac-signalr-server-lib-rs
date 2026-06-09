@@ -12,6 +12,7 @@
 //! Then connect with SignalR clients:
 //! - Market hub: http://localhost:5000/hubs/market
 //! - User hub: http://localhost:5000/hubs/user
+#![allow(clippy::pedantic, clippy::unwrap_used, clippy::indexing_slicing)]
 
 use async_trait::async_trait;
 use serde::Deserialize;

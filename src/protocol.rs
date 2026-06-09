@@ -1,4 +1,4 @@
-//! SignalR protocol handling (handshake, negotiation)
+//! `SignalR` protocol handling (handshake, negotiation)
 
 use crate::error::Result;
 use crate::error::SignalRError;
@@ -25,22 +25,24 @@ const MESSAGEPACK_RESULT_KIND_ERROR: u64 = 1;
 const MESSAGEPACK_RESULT_KIND_VOID: u64 = 2;
 const MESSAGEPACK_RESULT_KIND_NON_VOID: u64 = 3;
 
-/// Protocol type for SignalR communication
+/// Protocol type for `SignalR` communication
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Protocol {
     /// JSON protocol
     Json,
-    /// MessagePack protocol
+    /// `MessagePack` protocol
     MessagePack,
 }
 
 impl Protocol {
     /// Parse protocol from string (returns Option for convenience)
+    #[must_use]
     pub fn parse(s: &str) -> Option<Self> {
         s.parse().ok()
     }
 
     /// Get protocol name as string
+    #[must_use]
     pub fn as_str(&self) -> &str {
         match self {
             Protocol::Json => "json",
@@ -56,12 +58,12 @@ impl FromStr for Protocol {
         match s.to_lowercase().as_str() {
             "json" => Ok(Protocol::Json),
             "messagepack" => Ok(Protocol::MessagePack),
-            _ => Err(format!("Unknown protocol: {}", s)),
+            _ => Err(format!("Unknown protocol: {s}")),
         }
     }
 }
 
-/// SignalR handshake request
+/// `SignalR` handshake request
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HandshakeRequest {
@@ -71,7 +73,7 @@ pub struct HandshakeRequest {
     pub version: i32,
 }
 
-/// SignalR handshake response
+/// `SignalR` handshake response
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HandshakeResponse {
@@ -82,6 +84,7 @@ pub struct HandshakeResponse {
 
 impl HandshakeResponse {
     /// Create a successful handshake response
+    #[must_use]
     pub fn success() -> Self {
         Self { error: None }
     }
@@ -104,23 +107,38 @@ pub fn parse_handshake(data: &str) -> Result<HandshakeRequest> {
 /// Serialize a handshake response to a JSON string with record separator
 pub fn serialize_handshake(response: &HandshakeResponse) -> Result<String> {
     let json = serde_json::to_string(response)?;
-    Ok(format!("{}\u{001e}", json))
+    Ok(format!("{json}\u{001e}"))
 }
 
-/// Parse a SignalR message from JSON
+/// Parse a `SignalR` message from JSON.
+///
+/// # Errors
+///
+/// Returns an error if the message is not valid JSON or does not match a
+/// supported `SignalR` hub message shape.
 pub fn parse_message(data: &str) -> Result<HubMessage> {
     // SignalR messages end with the record separator (0x1E)
     let data = data.trim_end_matches('\u{001e}');
     serde_json::from_str(data).map_err(SignalRError::Json)
 }
 
-/// Serialize a SignalR message to JSON with record separator
+/// Serialize a `SignalR` message to JSON with record separator.
+///
+/// # Errors
+///
+/// Returns an error if the hub message cannot be serialized as JSON.
 pub fn serialize_message(message: &HubMessage) -> Result<String> {
     let json = serde_json::to_string(message)?;
-    Ok(format!("{}\u{001e}", json))
+    Ok(format!("{json}\u{001e}"))
 }
 
-/// Parse a single SignalR message from MessagePack binary framing.
+/// Parse a single `SignalR` message from `MessagePack` binary framing.
+///
+/// # Errors
+///
+/// Returns an error if the frame prefix is invalid, the payload is not valid
+/// `MessagePack`, or the payload does not contain exactly one supported hub
+/// message.
 pub fn parse_message_messagepack(data: &[u8]) -> Result<HubMessage> {
     let messages = parse_messages_messagepack(data)?;
     let mut messages = messages.into_iter();
@@ -137,7 +155,12 @@ pub fn parse_message_messagepack(data: &[u8]) -> Result<HubMessage> {
     Ok(message)
 }
 
-/// Serialize a SignalR message to MessagePack binary framing.
+/// Serialize a `SignalR` message to `MessagePack` binary framing.
+///
+/// # Errors
+///
+/// Returns an error if the hub message cannot be encoded as `MessagePack` or
+/// the encoded frame exceeds the maximum supported frame length.
 pub fn serialize_message_messagepack(message: &HubMessage) -> Result<Vec<u8>> {
     let body = serialize_messagepack_body(message)?;
     frame_messagepack_payload(&body)
@@ -154,14 +177,14 @@ fn serialize_messagepack_body(message: &HubMessage) -> Result<Vec<u8>> {
     let value = message_to_messagepack_value(message)?;
     let mut bytes = Vec::new();
     rmpv::encode::write_value(&mut bytes, &value)
-        .map_err(|error| SignalRError::Protocol(format!("MessagePack encode error: {}", error)))?;
+        .map_err(|error| SignalRError::Protocol(format!("MessagePack encode error: {error}")))?;
     Ok(bytes)
 }
 
 fn parse_messagepack_body(data: &[u8]) -> Result<HubMessage> {
     let mut cursor = Cursor::new(data);
     let value = rmpv::decode::read_value(&mut cursor)
-        .map_err(|error| SignalRError::Protocol(format!("MessagePack decode error: {}", error)))?;
+        .map_err(|error| SignalRError::Protocol(format!("MessagePack decode error: {error}")))?;
 
     if cursor.position() != data.len() as u64 {
         return Err(SignalRError::Protocol(
@@ -190,7 +213,10 @@ fn split_messagepack_frames(data: &[u8]) -> Result<Vec<&[u8]>> {
     let mut offset = 0;
 
     while offset < data.len() {
-        let (length, prefix_len) = read_varint_length(&data[offset..])?;
+        let remaining = data.get(offset..).ok_or_else(|| {
+            SignalRError::Protocol("MessagePack frame offset exceeds available data".to_string())
+        })?;
+        let (length, prefix_len) = read_varint_length(remaining)?;
         offset += prefix_len;
 
         let end = offset.checked_add(length).ok_or_else(|| {
@@ -203,7 +229,10 @@ fn split_messagepack_frames(data: &[u8]) -> Result<Vec<&[u8]>> {
             ));
         }
 
-        frames.push(&data[offset..end]);
+        let frame = data.get(offset..end).ok_or_else(|| {
+            SignalRError::Protocol("MessagePack frame length exceeds available data".to_string())
+        })?;
+        frames.push(frame);
         offset = end;
     }
 
@@ -218,7 +247,9 @@ fn write_varint_length(mut length: usize, output: &mut Vec<u8>) -> Result<()> {
     }
 
     loop {
-        let mut byte = (length & 0x7f) as u8;
+        let mut byte = u8::try_from(length & 0x7f).map_err(|_| {
+            SignalRError::Protocol("MessagePack frame length byte overflow".to_string())
+        })?;
         length >>= 7;
 
         if length > 0 {
@@ -344,76 +375,79 @@ fn close_to_messagepack(message: &CloseMessage) -> MessagePackValue {
 }
 
 fn messagepack_value_to_message(value: MessagePackValue) -> Result<HubMessage> {
-    let items = match value {
-        MessagePackValue::Array(items) => items,
-        _ => {
-            return Err(SignalRError::Protocol(
-                "MessagePack hub message must be an array".to_string(),
-            ));
-        }
+    let MessagePackValue::Array(items) = value else {
+        return Err(SignalRError::Protocol(
+            "MessagePack hub message must be an array".to_string(),
+        ));
     };
 
     let message_type = messagepack_item_as_u64(&items, 0, "message type")?;
     match message_type {
-        1 => parse_messagepack_invocation(items),
-        2 => parse_messagepack_stream_item(items),
-        3 => parse_messagepack_completion(items),
-        4 => parse_messagepack_stream_invocation(items),
-        5 => parse_messagepack_cancel_invocation(items),
-        6 => parse_messagepack_ping(items),
-        7 => parse_messagepack_close(items),
+        1 => parse_messagepack_invocation(&items),
+        2 => parse_messagepack_stream_item(&items),
+        3 => parse_messagepack_completion(&items),
+        4 => parse_messagepack_stream_invocation(&items),
+        5 => parse_messagepack_cancel_invocation(&items),
+        6 => parse_messagepack_ping(&items),
+        7 => parse_messagepack_close(&items),
         _ => Err(SignalRError::Protocol(format!(
-            "Unknown MessagePack message type: {}",
-            message_type
+            "Unknown MessagePack message type: {message_type}"
         ))),
     }
 }
 
-fn parse_messagepack_invocation(items: Vec<MessagePackValue>) -> Result<HubMessage> {
-    validate_messagepack_item_count(&items, 5, 6, "Invocation")?;
-    validate_messagepack_headers(&items, 1)?;
+fn parse_messagepack_invocation(items: &[MessagePackValue]) -> Result<HubMessage> {
+    validate_messagepack_item_count(items, 5, 6, "Invocation")?;
+    validate_messagepack_headers(items, 1)?;
 
     Ok(HubMessage::Invocation(InvocationMessage {
-        invocation_id: optional_messagepack_string(&items[2], "invocationId")?,
-        target: messagepack_item_as_string(&items, 3, "target")?,
-        arguments: messagepack_item_as_json_array(&items, 4, "arguments")?,
-        stream_ids: optional_messagepack_string_array(&items, 5, "streamIds")?,
+        invocation_id: optional_messagepack_string(
+            messagepack_item(items, 2, "invocationId")?,
+            "invocationId",
+        )?,
+        target: messagepack_item_as_string(items, 3, "target")?,
+        arguments: messagepack_item_as_json_array(items, 4, "arguments")?,
+        stream_ids: optional_messagepack_string_array(items, 5, "streamIds")?,
     }))
 }
 
-fn parse_messagepack_stream_item(items: Vec<MessagePackValue>) -> Result<HubMessage> {
-    validate_messagepack_item_count(&items, 4, 4, "StreamItem")?;
-    validate_messagepack_headers(&items, 1)?;
+fn parse_messagepack_stream_item(items: &[MessagePackValue]) -> Result<HubMessage> {
+    validate_messagepack_item_count(items, 4, 4, "StreamItem")?;
+    validate_messagepack_headers(items, 1)?;
 
     Ok(HubMessage::StreamItem(StreamItemMessage {
-        invocation_id: messagepack_item_as_string(&items, 2, "invocationId")?,
-        item: messagepack_to_json_value(items[3].clone())?,
+        invocation_id: messagepack_item_as_string(items, 2, "invocationId")?,
+        item: messagepack_to_json_value(messagepack_item(items, 3, "item")?.clone())?,
     }))
 }
 
-fn parse_messagepack_completion(items: Vec<MessagePackValue>) -> Result<HubMessage> {
-    validate_messagepack_item_count(&items, 4, 5, "Completion")?;
-    validate_messagepack_headers(&items, 1)?;
+fn parse_messagepack_completion(items: &[MessagePackValue]) -> Result<HubMessage> {
+    validate_messagepack_item_count(items, 4, 5, "Completion")?;
+    validate_messagepack_headers(items, 1)?;
 
-    let invocation_id = messagepack_item_as_string(&items, 2, "invocationId")?;
-    let result_kind = messagepack_item_as_u64(&items, 3, "resultKind")?;
+    let invocation_id = messagepack_item_as_string(items, 2, "invocationId")?;
+    let result_kind = messagepack_item_as_u64(items, 3, "resultKind")?;
     let (result, error) = match result_kind {
         MESSAGEPACK_RESULT_KIND_ERROR => {
-            validate_messagepack_item_count(&items, 5, 5, "Completion error")?;
-            (None, Some(messagepack_item_as_string(&items, 4, "error")?))
+            validate_messagepack_item_count(items, 5, 5, "Completion error")?;
+            (None, Some(messagepack_item_as_string(items, 4, "error")?))
         }
         MESSAGEPACK_RESULT_KIND_VOID => {
-            validate_messagepack_item_count(&items, 4, 4, "Completion void")?;
+            validate_messagepack_item_count(items, 4, 4, "Completion void")?;
             (None, None)
         }
         MESSAGEPACK_RESULT_KIND_NON_VOID => {
-            validate_messagepack_item_count(&items, 5, 5, "Completion result")?;
-            (Some(messagepack_to_json_value(items[4].clone())?), None)
+            validate_messagepack_item_count(items, 5, 5, "Completion result")?;
+            (
+                Some(messagepack_to_json_value(
+                    messagepack_item(items, 4, "result")?.clone(),
+                )?),
+                None,
+            )
         }
         _ => {
             return Err(SignalRError::Protocol(format!(
-                "Invalid MessagePack completion result kind: {}",
-                result_kind
+                "Invalid MessagePack completion result kind: {result_kind}"
             )));
         }
     };
@@ -425,38 +459,38 @@ fn parse_messagepack_completion(items: Vec<MessagePackValue>) -> Result<HubMessa
     }))
 }
 
-fn parse_messagepack_stream_invocation(items: Vec<MessagePackValue>) -> Result<HubMessage> {
-    validate_messagepack_item_count(&items, 5, 6, "StreamInvocation")?;
-    validate_messagepack_headers(&items, 1)?;
+fn parse_messagepack_stream_invocation(items: &[MessagePackValue]) -> Result<HubMessage> {
+    validate_messagepack_item_count(items, 5, 6, "StreamInvocation")?;
+    validate_messagepack_headers(items, 1)?;
 
     Ok(HubMessage::StreamInvocation(StreamInvocationMessage {
-        invocation_id: messagepack_item_as_string(&items, 2, "invocationId")?,
-        target: messagepack_item_as_string(&items, 3, "target")?,
-        arguments: messagepack_item_as_json_array(&items, 4, "arguments")?,
-        stream_ids: optional_messagepack_string_array(&items, 5, "streamIds")?,
+        invocation_id: messagepack_item_as_string(items, 2, "invocationId")?,
+        target: messagepack_item_as_string(items, 3, "target")?,
+        arguments: messagepack_item_as_json_array(items, 4, "arguments")?,
+        stream_ids: optional_messagepack_string_array(items, 5, "streamIds")?,
     }))
 }
 
-fn parse_messagepack_cancel_invocation(items: Vec<MessagePackValue>) -> Result<HubMessage> {
-    validate_messagepack_item_count(&items, 3, 3, "CancelInvocation")?;
-    validate_messagepack_headers(&items, 1)?;
+fn parse_messagepack_cancel_invocation(items: &[MessagePackValue]) -> Result<HubMessage> {
+    validate_messagepack_item_count(items, 3, 3, "CancelInvocation")?;
+    validate_messagepack_headers(items, 1)?;
 
     Ok(HubMessage::CancelInvocation(CancelInvocationMessage {
-        invocation_id: messagepack_item_as_string(&items, 2, "invocationId")?,
+        invocation_id: messagepack_item_as_string(items, 2, "invocationId")?,
     }))
 }
 
-fn parse_messagepack_ping(items: Vec<MessagePackValue>) -> Result<HubMessage> {
-    validate_messagepack_item_count(&items, 1, 1, "Ping")?;
+fn parse_messagepack_ping(items: &[MessagePackValue]) -> Result<HubMessage> {
+    validate_messagepack_item_count(items, 1, 1, "Ping")?;
     Ok(HubMessage::Ping(PingMessage {}))
 }
 
-fn parse_messagepack_close(items: Vec<MessagePackValue>) -> Result<HubMessage> {
-    validate_messagepack_item_count(&items, 1, 3, "Close")?;
+fn parse_messagepack_close(items: &[MessagePackValue]) -> Result<HubMessage> {
+    validate_messagepack_item_count(items, 1, 3, "Close")?;
 
     Ok(HubMessage::Close(CloseMessage {
-        error: optional_messagepack_item_as_string(&items, 1, "error")?,
-        allow_reconnect: optional_messagepack_item_as_bool(&items, 2, "allowReconnect")?,
+        error: optional_messagepack_item_as_string(items, 1, "error")?,
+        allow_reconnect: optional_messagepack_item_as_bool(items, 2, "allowReconnect")?,
     }))
 }
 
@@ -465,9 +499,7 @@ fn empty_messagepack_headers() -> MessagePackValue {
 }
 
 fn optional_string_to_messagepack(value: Option<&str>) -> MessagePackValue {
-    value
-        .map(MessagePackValue::from)
-        .unwrap_or(MessagePackValue::Nil)
+    value.map_or(MessagePackValue::Nil, MessagePackValue::from)
 }
 
 fn string_array_to_messagepack(values: Option<&[String]>) -> MessagePackValue {
@@ -621,12 +653,22 @@ fn validate_messagepack_item_count(
             if min == max {
                 String::new()
             } else {
-                format!("-{}", max)
+                format!("-{max}")
             }
         )));
     }
 
     Ok(())
+}
+
+fn messagepack_item<'a>(
+    items: &'a [MessagePackValue],
+    index: usize,
+    field_name: &str,
+) -> Result<&'a MessagePackValue> {
+    items.get(index).ok_or_else(|| {
+        SignalRError::Protocol(format!("MessagePack field '{field_name}' is missing"))
+    })
 }
 
 fn messagepack_item_as_u64(
@@ -639,8 +681,7 @@ fn messagepack_item_as_u64(
         .and_then(MessagePackValue::as_u64)
         .ok_or_else(|| {
             SignalRError::Protocol(format!(
-                "MessagePack field '{}' must be an integer",
-                field_name
+                "MessagePack field '{field_name}' must be an integer"
             ))
         })
 }
@@ -655,10 +696,7 @@ fn messagepack_item_as_string(
         .and_then(MessagePackValue::as_str)
         .map(str::to_string)
         .ok_or_else(|| {
-            SignalRError::Protocol(format!(
-                "MessagePack field '{}' must be a string",
-                field_name
-            ))
+            SignalRError::Protocol(format!("MessagePack field '{field_name}' must be a string"))
         })
 }
 
@@ -682,8 +720,7 @@ fn optional_messagepack_item_as_bool(
         Some(MessagePackValue::Nil) | None => Ok(None),
         Some(MessagePackValue::Boolean(value)) => Ok(Some(*value)),
         Some(_) => Err(SignalRError::Protocol(format!(
-            "MessagePack field '{}' must be a boolean",
-            field_name
+            "MessagePack field '{field_name}' must be a boolean"
         ))),
     }
 }
@@ -698,10 +735,7 @@ fn optional_messagepack_string(
             .as_str()
             .map(|value| Some(value.to_string()))
             .ok_or_else(|| {
-                SignalRError::Protocol(format!(
-                    "MessagePack field '{}' must be a string",
-                    field_name
-                ))
+                SignalRError::Protocol(format!("MessagePack field '{field_name}' must be a string"))
             }),
     }
 }
@@ -718,8 +752,7 @@ fn messagepack_item_as_json_array(
             .map(messagepack_to_json_value)
             .collect::<Result<Vec<_>>>(),
         _ => Err(SignalRError::Protocol(format!(
-            "MessagePack field '{}' must be an array",
-            field_name
+            "MessagePack field '{field_name}' must be an array"
         ))),
     }
 }
@@ -737,21 +770,20 @@ fn optional_messagepack_string_array(
             .map(|value| {
                 value.as_str().map(str::to_string).ok_or_else(|| {
                     SignalRError::Protocol(format!(
-                        "MessagePack field '{}' must contain only strings",
-                        field_name
+                        "MessagePack field '{field_name}' must contain only strings"
                     ))
                 })
             })
             .collect::<Result<Vec<_>>>()
             .map(Some),
         _ => Err(SignalRError::Protocol(format!(
-            "MessagePack field '{}' must be an array",
-            field_name
+            "MessagePack field '{field_name}' must be an array"
         ))),
     }
 }
 
 #[cfg(test)]
+#[allow(clippy::pedantic, clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
     use crate::message::CompletionMessage;

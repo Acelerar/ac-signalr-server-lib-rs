@@ -1,4 +1,4 @@
-//! Hub trait and context for SignalR hubs
+//! Hub trait and context for `SignalR` hubs
 
 use crate::connection::Connection;
 use crate::connection::ConnectionId;
@@ -24,11 +24,13 @@ impl HubContext {
     /// Most applications receive a `HubContext` from the runtime instead of
     /// constructing one directly. This constructor is mainly useful for tests
     /// and custom integration layers.
+    #[must_use]
     pub fn new(connection: Arc<Connection>, sender: mpsc::UnboundedSender<HubMessage>) -> Self {
         Self { connection, sender }
     }
 
     /// Returns the stable identifier for the current connection.
+    #[must_use]
     pub fn connection_id(&self) -> ConnectionId {
         self.connection.id()
     }
@@ -37,11 +39,14 @@ impl HubContext {
     ///
     /// The [`Connection`] can be used to read or update per-connection metadata
     /// that should be available across hub callbacks.
+    #[must_use]
     pub fn connection(&self) -> &Arc<Connection> {
         &self.connection
     }
 
-    /// Queues a server-to-client SignalR message for the current connection.
+    /// Queues a server-to-client `SignalR` message for the current connection.
+    ///
+    /// # Errors
     ///
     /// Returns [`crate::SignalRError::ConnectionClosed`] when the client has
     /// already disconnected and the outbound channel is no longer available.
@@ -58,7 +63,7 @@ impl HubContext {
 /// live behind cheap-to-clone handles such as `Arc<_>` or Tokio channel types.
 #[async_trait]
 pub trait Hub: Send + Sync + Clone + 'static {
-    /// Called after a client successfully completes the SignalR handshake.
+    /// Called after a client successfully completes the `SignalR` handshake.
     async fn on_connected(&self, _ctx: &HubContext) {}
 
     /// Called after the connection loop finishes for a client.
@@ -94,6 +99,7 @@ pub trait Hub: Send + Sync + Clone + 'static {
 }
 
 #[cfg(test)]
+#[allow(clippy::pedantic, clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
     use crate::message::HubMessage;
