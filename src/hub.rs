@@ -7,6 +7,7 @@ use crate::message::HubMessage;
 use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tokio::sync::watch;
 
 /// Per-connection context passed to [`Hub`] callbacks.
 ///
@@ -15,7 +16,14 @@ use tokio::sync::mpsc;
 #[derive(Clone)]
 pub struct HubContext {
     connection: Arc<Connection>,
-    sender: mpsc::UnboundedSender<HubMessage>,
+    sender: OutboundSender,
+    disconnect_tx: Option<watch::Sender<bool>>,
+}
+
+#[derive(Clone)]
+enum OutboundSender {
+    Unbounded(mpsc::UnboundedSender<HubMessage>),
+    Bounded(mpsc::Sender<HubMessage>),
 }
 
 impl HubContext {
@@ -26,7 +34,23 @@ impl HubContext {
     /// and custom integration layers.
     #[must_use]
     pub fn new(connection: Arc<Connection>, sender: mpsc::UnboundedSender<HubMessage>) -> Self {
-        Self { connection, sender }
+        Self {
+            connection,
+            sender: OutboundSender::Unbounded(sender),
+            disconnect_tx: None,
+        }
+    }
+
+    pub(crate) fn new_bounded(
+        connection: Arc<Connection>,
+        sender: mpsc::Sender<HubMessage>,
+        disconnect_tx: watch::Sender<bool>,
+    ) -> Self {
+        Self {
+            connection,
+            sender: OutboundSender::Bounded(sender),
+            disconnect_tx: Some(disconnect_tx),
+        }
     }
 
     /// Returns the stable identifier for the current connection.
@@ -49,11 +73,25 @@ impl HubContext {
     /// # Errors
     ///
     /// Returns [`crate::SignalRError::ConnectionClosed`] when the client has
-    /// already disconnected and the outbound channel is no longer available.
+    /// disconnected or the bounded outbound channel is full.
     pub fn send(&self, message: HubMessage) -> Result<()> {
-        self.sender
-            .send(message)
-            .map_err(|_| crate::error::SignalRError::ConnectionClosed)
+        match &self.sender {
+            OutboundSender::Unbounded(sender) => sender
+                .send(message)
+                .map_err(|_| crate::error::SignalRError::ConnectionClosed),
+            OutboundSender::Bounded(sender) => match sender.try_send(message) {
+                Ok(()) => Ok(()),
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    Err(crate::error::SignalRError::ConnectionClosed)
+                }
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    if let Some(disconnect_tx) = &self.disconnect_tx {
+                        disconnect_tx.send_replace(true);
+                    }
+                    Err(crate::error::SignalRError::ConnectionClosed)
+                }
+            },
+        }
     }
 }
 
@@ -174,6 +212,18 @@ mod tests {
             result.unwrap_err(),
             crate::error::SignalRError::ConnectionClosed
         ));
+    }
+
+    #[tokio::test]
+    async fn test_bounded_hub_context_disconnects_when_full() {
+        let connection = Arc::new(Connection::new());
+        let (tx, _rx) = mpsc::channel(1);
+        let (disconnect_tx, disconnect_rx) = watch::channel(false);
+        let ctx = HubContext::new_bounded(connection, tx, disconnect_tx);
+
+        assert!(ctx.send(HubMessage::Ping(PingMessage {})).is_ok());
+        assert!(ctx.send(HubMessage::Ping(PingMessage {})).is_err());
+        assert!(*disconnect_rx.borrow());
     }
 
     #[tokio::test]
