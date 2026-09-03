@@ -32,6 +32,10 @@ pub enum SignalRError {
     #[error("Protocol error: {0}")]
     Protocol(String),
 
+    /// Invalid server configuration
+    #[error("Invalid configuration: {0}")]
+    InvalidConfiguration(String),
+
     /// Connection closed
     #[error("Connection closed")]
     ConnectionClosed,
@@ -54,6 +58,15 @@ mod tests {
     fn test_protocol_error() {
         let error = SignalRError::Protocol("test error".to_string());
         assert_eq!(format!("{}", error), "Protocol error: test error");
+    }
+
+    #[test]
+    fn test_invalid_configuration_error() {
+        let error = SignalRError::InvalidConfiguration("capacity must be positive".to_string());
+        assert_eq!(
+            format!("{error}"),
+            "Invalid configuration: capacity must be positive"
+        );
     }
 
     #[test]

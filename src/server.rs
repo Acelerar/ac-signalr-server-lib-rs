@@ -55,6 +55,9 @@ const CLIENT_TIMEOUT: Duration = Duration::from_secs(30);
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
 const CLOSE_ECHO_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Default capacity for each connection's outbound hub-message and automatic-frame queues.
+pub const DEFAULT_OUTBOUND_CHANNEL_CAPACITY: usize = 10_000;
+
 /// `SignalR` server adapter that exposes a hub through Axum routes.
 ///
 /// The hub value is cloned into per-connection tasks, so shared application
@@ -68,6 +71,7 @@ pub struct SignalRServer<H: Hub> {
 struct SignalRServerState<H: Hub> {
     hub: H,
     shutdown: Arc<SignalRServerShutdownState>,
+    outbound_channel_capacity: usize,
 }
 
 struct SignalRServerShutdownState {
@@ -171,10 +175,35 @@ impl SignalRServerShutdownState {
 impl<H: Hub> SignalRServer<H> {
     /// Creates a new `SignalR` server for the provided hub implementation.
     pub fn new(hub: H) -> Self {
+        Self::from_hub(hub, DEFAULT_OUTBOUND_CHANNEL_CAPACITY)
+    }
+
+    /// Creates a new server with a custom per-connection outbound queue capacity.
+    ///
+    /// The capacity is applied independently to the hub-message queue and the
+    /// automatic WebSocket-frame queue. A full queue causes the affected client
+    /// connection to close instead of allowing memory usage to grow without a
+    /// bound.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SignalRError::InvalidConfiguration`] when `capacity` is zero.
+    pub fn new_with_outbound_channel_capacity(hub: H, capacity: usize) -> Result<Self> {
+        if capacity == 0 {
+            return Err(SignalRError::InvalidConfiguration(
+                "outbound channel capacity must be greater than zero".to_string(),
+            ));
+        }
+
+        Ok(Self::from_hub(hub, capacity))
+    }
+
+    fn from_hub(hub: H, outbound_channel_capacity: usize) -> Self {
         Self {
             state: Arc::new(SignalRServerState {
                 hub,
                 shutdown: Arc::new(SignalRServerShutdownState::new()),
+                outbound_channel_capacity,
             }),
         }
     }
@@ -363,12 +392,15 @@ async fn handle_socket<H: Hub>(
     // Wrap the read half in FragmentCollectorRead
     let mut ws_read = FragmentCollectorRead::new(ws_read);
 
-    // Create channels for bidirectional communication
-    let (tx, mut rx) = mpsc::unbounded_channel::<HubMessage>();
-    let (auto_frame_tx, mut auto_frame_rx) = mpsc::unbounded_channel::<Frame<'static>>();
+    // Create bounded channels for bidirectional communication. A full outbound
+    // channel marks the connection for shutdown instead of retaining messages.
+    let (tx, mut rx) = mpsc::channel::<HubMessage>(server.outbound_channel_capacity);
+    let (auto_frame_tx, mut auto_frame_rx) =
+        mpsc::channel::<Frame<'static>>(server.outbound_channel_capacity);
+    let (disconnect_tx, mut disconnect_rx) = watch::channel(false);
     let (ws_close_sent_tx, mut ws_close_sent_rx) = watch::channel(false);
     let (reader_done_tx, mut reader_done_rx) = watch::channel(false);
-    let ctx = HubContext::new(connection.clone(), tx);
+    let ctx = HubContext::new_bounded(connection.clone(), tx, disconnect_tx.clone());
 
     // Notify hub of connection
     server.hub.on_connected(&ctx).await;
@@ -380,6 +412,7 @@ async fn handle_socket<H: Hub>(
     let mut server_shutdown_rx = server.shutdown.subscribe();
 
     let protocol_read = protocol;
+    let read_disconnect_tx = disconnect_tx.clone();
     let read_task = tokio::spawn(async move {
         let auto_frame_tx = auto_frame_tx;
         let mut awaiting_close_echo = false;
@@ -428,8 +461,11 @@ async fn handle_socket<H: Hub>(
             }
 
             let auto_frame_tx = auto_frame_tx.clone();
+            let disconnect_tx = read_disconnect_tx.clone();
             let mut send_fn = move |frame: Frame<'static>| {
-                let _ = auto_frame_tx.send(frame);
+                if auto_frame_tx.try_send(frame).is_err() {
+                    disconnect_tx.send_replace(true);
+                }
                 std::future::ready(Ok::<(), std::io::Error>(()))
             };
 
@@ -508,7 +544,7 @@ async fn handle_socket<H: Hub>(
         keepalive_interval.tick().await;
 
         loop {
-            if *server_shutdown_rx.borrow() {
+            if *server_shutdown_rx.borrow() || *disconnect_rx.borrow() {
                 let close_message = HubMessage::Close(CloseMessage {
                     error: None,
                     allow_reconnect: Some(false),
@@ -586,6 +622,7 @@ async fn handle_socket<H: Hub>(
                     }
                 }
                 _changed = server_shutdown_rx.changed() => {}
+                _changed = disconnect_rx.changed() => {}
                 Some(frame) = auto_frame_rx.recv() => {
                     if let Err(error) = ws_write.write_frame(frame).await {
                         error!("Failed to send automatic frame on {}: {}", connection_id_write, error);
@@ -954,6 +991,24 @@ mod tests {
         let connection = Arc::new(Connection::new());
         let (tx, rx) = mpsc::unbounded_channel();
         (HubContext::new(connection, tx), rx)
+    }
+
+    #[test]
+    fn custom_outbound_channel_capacity_is_applied() {
+        let server = SignalRServer::new_with_outbound_channel_capacity(TestHub, 123).unwrap();
+
+        assert_eq!(server.state.outbound_channel_capacity, 123);
+    }
+
+    #[test]
+    fn zero_outbound_channel_capacity_is_rejected() {
+        let result = SignalRServer::new_with_outbound_channel_capacity(TestHub, 0);
+
+        assert!(matches!(
+            result,
+            Err(SignalRError::InvalidConfiguration(message))
+                if message == "outbound channel capacity must be greater than zero"
+        ));
     }
 
     struct SpawnExecutor;

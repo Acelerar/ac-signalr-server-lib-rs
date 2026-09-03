@@ -104,3 +104,4 @@ pub use protocol::HandshakeResponse;
 pub use protocol::Protocol;
 pub use server::SignalRServer;
 pub use server::SignalRServerHandle;
+pub use server::DEFAULT_OUTBOUND_CHANNEL_CAPACITY;
