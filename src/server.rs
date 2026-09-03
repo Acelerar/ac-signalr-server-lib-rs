@@ -54,7 +54,9 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(30);
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
 const CLOSE_ECHO_TIMEOUT: Duration = Duration::from_secs(5);
-const OUTBOUND_CHANNEL_CAPACITY: usize = 10_000;
+
+/// Default capacity for each connection's outbound hub-message and automatic-frame queues.
+pub const DEFAULT_OUTBOUND_CHANNEL_CAPACITY: usize = 10_000;
 
 /// `SignalR` server adapter that exposes a hub through Axum routes.
 ///
@@ -69,6 +71,7 @@ pub struct SignalRServer<H: Hub> {
 struct SignalRServerState<H: Hub> {
     hub: H,
     shutdown: Arc<SignalRServerShutdownState>,
+    outbound_channel_capacity: usize,
 }
 
 struct SignalRServerShutdownState {
@@ -172,10 +175,35 @@ impl SignalRServerShutdownState {
 impl<H: Hub> SignalRServer<H> {
     /// Creates a new `SignalR` server for the provided hub implementation.
     pub fn new(hub: H) -> Self {
+        Self::from_hub(hub, DEFAULT_OUTBOUND_CHANNEL_CAPACITY)
+    }
+
+    /// Creates a new server with a custom per-connection outbound queue capacity.
+    ///
+    /// The capacity is applied independently to the hub-message queue and the
+    /// automatic WebSocket-frame queue. A full queue causes the affected client
+    /// connection to close instead of allowing memory usage to grow without a
+    /// bound.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SignalRError::InvalidConfiguration`] when `capacity` is zero.
+    pub fn new_with_outbound_channel_capacity(hub: H, capacity: usize) -> Result<Self> {
+        if capacity == 0 {
+            return Err(SignalRError::InvalidConfiguration(
+                "outbound channel capacity must be greater than zero".to_string(),
+            ));
+        }
+
+        Ok(Self::from_hub(hub, capacity))
+    }
+
+    fn from_hub(hub: H, outbound_channel_capacity: usize) -> Self {
         Self {
             state: Arc::new(SignalRServerState {
                 hub,
                 shutdown: Arc::new(SignalRServerShutdownState::new()),
+                outbound_channel_capacity,
             }),
         }
     }
@@ -366,9 +394,9 @@ async fn handle_socket<H: Hub>(
 
     // Create bounded channels for bidirectional communication. A full outbound
     // channel marks the connection for shutdown instead of retaining messages.
-    let (tx, mut rx) = mpsc::channel::<HubMessage>(OUTBOUND_CHANNEL_CAPACITY);
+    let (tx, mut rx) = mpsc::channel::<HubMessage>(server.outbound_channel_capacity);
     let (auto_frame_tx, mut auto_frame_rx) =
-        mpsc::channel::<Frame<'static>>(OUTBOUND_CHANNEL_CAPACITY);
+        mpsc::channel::<Frame<'static>>(server.outbound_channel_capacity);
     let (disconnect_tx, mut disconnect_rx) = watch::channel(false);
     let (ws_close_sent_tx, mut ws_close_sent_rx) = watch::channel(false);
     let (reader_done_tx, mut reader_done_rx) = watch::channel(false);
@@ -963,6 +991,24 @@ mod tests {
         let connection = Arc::new(Connection::new());
         let (tx, rx) = mpsc::unbounded_channel();
         (HubContext::new(connection, tx), rx)
+    }
+
+    #[test]
+    fn custom_outbound_channel_capacity_is_applied() {
+        let server = SignalRServer::new_with_outbound_channel_capacity(TestHub, 123).unwrap();
+
+        assert_eq!(server.state.outbound_channel_capacity, 123);
+    }
+
+    #[test]
+    fn zero_outbound_channel_capacity_is_rejected() {
+        let result = SignalRServer::new_with_outbound_channel_capacity(TestHub, 0);
+
+        assert!(matches!(
+            result,
+            Err(SignalRError::InvalidConfiguration(message))
+                if message == "outbound channel capacity must be greater than zero"
+        ));
     }
 
     struct SpawnExecutor;
